@@ -3,8 +3,8 @@ FROM oven/bun:alpine AS builder
 
 WORKDIR /app
 
-COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile || bun install
+COPY package.json ./
+RUN bun install
 
 COPY . .
 
@@ -24,7 +24,7 @@ COPY --from=builder --chown=bun:bun /app/src/env.ts ./src/env.ts
 COPY --from=builder --chown=bun:bun /app/src/database/schemas.ts /app/src/database/schemas.sqlite.ts ./src/database/
 
 RUN apk add --no-cache su-exec &&\
-  bun install --production --frozen-lockfile &&\
+  bun install --production &&\
   # pglite.wasm & pglite.data symlink from /app/dist
   PGLITE_PKG="node_modules/@electric-sql/pglite/dist" &&\
   rm "$PGLITE_PKG/pglite.wasm" &&\
