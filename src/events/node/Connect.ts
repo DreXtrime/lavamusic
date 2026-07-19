@@ -4,6 +4,7 @@ import logger from "../../structures/Logger";
 import { LavamusicEventType } from "../../types/events";
 import { LOG_LEVEL } from "../../types/log";
 import { sendLog } from "../../utils/BotLog";
+
 export default class Connect extends Event {
 	constructor(client: Lavamusic, file: string) {
 		super(client, file, {
@@ -14,6 +15,11 @@ export default class Connect extends Event {
 
 	public async run(node: LavalinkNode): Promise<void> {
 		logger.success(`Node ${node.id} is ready!`);
+		sendLog(this.client, `Node ${node.id} is ready!`, LOG_LEVEL.SUCCESS);
+
+		// Restore 24/7 guilds that were active before a node drop.
+		// Skip if the bot just started (no guilds cached yet).
+		if (!this.client.isReady()) return;
 
 		let data = await this.client.db.get_247();
 		if (!data) return;
@@ -41,16 +47,14 @@ export default class Connect extends Event {
 						});
 						if (!player.connected) await player.connect();
 					} catch (error) {
-						logger.error(`Failed to create queue for guild ${guild.id}: ${error}`);
+						logger.error(`Failed to reconnect 24/7 player for guild ${guild.id}: ${error}`);
 					}
 				} else {
 					logger.warn(
-						`Missing channels for guild ${guild.id}. Text channel: ${main.textId}, Voice channel: ${main.voiceId}`,
+						`Missing channels for guild ${guild.id}. Text: ${main.textId}, Voice: ${main.voiceId}`,
 					);
 				}
 			}, index * 1000);
 		});
-
-		sendLog(this.client, `Node ${node.id} is ready!`, LOG_LEVEL.SUCCESS);
 	}
 }

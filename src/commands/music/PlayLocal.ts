@@ -145,3 +145,4 @@ export default class PlayLocal extends Command {
 		if (!player.playing && player.queue.tracks.length > 0) await player.play();
 	}
 }
+

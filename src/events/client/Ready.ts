@@ -4,6 +4,7 @@ import { env } from "../../env";
 import { Event, type Lavamusic } from "../../structures/index";
 import logger from "../../structures/Logger";
 import { LavamusicEventType } from "../../types/events";
+
 export default class Ready extends Event {
 	constructor(client: Lavamusic, file: string) {
 		super(client, file, {
@@ -16,25 +17,20 @@ export default class Ready extends Event {
 		logger.success(`${this.client.user?.tag} is ready!`);
 
 		this.client.user?.setPresence({
-			activities: [
-				{
-					name: env.BOT_ACTIVITY,
-					type: env.BOT_ACTIVITY_TYPE,
-				},
-			],
+			activities: [{ name: env.BOT_ACTIVITY, type: env.BOT_ACTIVITY_TYPE }],
 			status: env.BOT_STATUS as any,
 		});
 
 		if (env.TOPGG) {
 			const autoPoster = AutoPoster(env.TOPGG, this.client);
 			setInterval(() => {
-				autoPoster.on("posted", (_stats) => {
-					logger.info("Successfully posted stats to Top.gg!");
-				});
-			}, 86400000); // 24 hours in milliseconds
+				autoPoster.on("posted", () => logger.info("Posted stats to Top.gg!"));
+			}, 86400000);
 		} else {
 			logger.warn("Top.gg token not found. Skipping auto poster.");
 		}
-		await this.client.manager.init({ ...this.client.user!, shards: "auto" });
+
+		// Connect to Lavalink nodes on startup and keep them connected permanently.
+		await this.client.manager.initAndConnect({ ...this.client.user!, shards: "auto" });
 	}
 }

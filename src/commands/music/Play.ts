@@ -62,6 +62,25 @@ export default class Play extends Command {
 	public async run(client: Lavamusic, ctx: Context, args: string[]): Promise<any> {
 		const query = args.join(" ");
 		await ctx.sendDeferMessage(ctx.locale(I18N.commands.play.loading));
+
+		const embed = this.client.embed();
+
+		// Wait briefly for a node if none are connected yet
+		const nodeReady = await client.manager.waitForNode(10_000);
+		if (!nodeReady) {
+			return await ctx.editMessage({
+				content: "",
+				embeds: [
+					embed
+						.setColor(this.client.color.red)
+						.setDescription(
+							ctx.locale(I18N.commands.play.errors.search_error) +
+								"\n*(No Lavalink nodes are available right now. Please try again in a moment.)*",
+						),
+				],
+			});
+		}
+
 		let player = client.manager.getPlayer(ctx.guild.id);
 		const memberVoiceChannel = (ctx.member as any).voice.channel as VoiceChannel;
 
@@ -78,7 +97,6 @@ export default class Play extends Command {
 		if (!player.connected) await player.connect();
 
 		const response = (await player.search({ query: query }, ctx.author)) as SearchResult;
-		const embed = this.client.embed();
 
 		if (!response || response.tracks?.length === 0) {
 			return await ctx.editMessage({
@@ -124,6 +142,7 @@ export default class Play extends Command {
 		}
 		if (!player.playing && player.queue.tracks.length > 0) await player.play({ paused: false });
 	}
+
 	public async autocomplete(interaction: AutocompleteInteraction): Promise<void> {
 		const focusedValue = interaction.options.getFocused(true);
 
@@ -131,19 +150,27 @@ export default class Play extends Command {
 			return interaction.respond([]);
 		}
 
-		const res = await this.client.manager.search(focusedValue.value.trim(), interaction.user);
-		const songs: ApplicationCommandOptionChoiceData[] = [];
+		// Autocomplete only works if nodes are already connected (don't spin up a connection for every keystroke)
+		const hasNode = this.client.manager.hasConnectedNode();
+		if (!hasNode) return interaction.respond([]);
 
-		if (res.loadType === "search") {
-			res.tracks.slice(0, 10).forEach((track) => {
-				const name = `${track.info.title} by ${track.info.author}`;
-				songs.push({
-					name: name.length > 100 ? `${name.substring(0, 97)}...` : name,
-					value: track.info.uri,
+		try {
+			const res = await this.client.manager.search(focusedValue.value.trim(), interaction.user);
+			const songs: ApplicationCommandOptionChoiceData[] = [];
+
+			if (res.loadType === "search") {
+				res.tracks.slice(0, 10).forEach((track) => {
+					const name = `${track.info.title} by ${track.info.author}`;
+					songs.push({
+						name: name.length > 100 ? `${name.substring(0, 97)}...` : name,
+						value: track.info.uri,
+					});
 				});
-			});
-		}
+			}
 
-		return await interaction.respond(songs);
+			return await interaction.respond(songs);
+		} catch {
+			return interaction.respond([]);
+		}
 	}
 }

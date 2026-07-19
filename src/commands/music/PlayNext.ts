@@ -148,19 +148,27 @@ export default class PlayNext extends Command {
 			return interaction.respond([]);
 		}
 
-		const res = await this.client.manager.search(focusedValue.value.trim(), interaction.user);
-		const songs: ApplicationCommandOptionChoiceData[] = [];
+		const hasNode = this.client.manager.hasConnectedNode();
+		if (!hasNode) return interaction.respond([]);
 
-		if (res.loadType === "search") {
-			res.tracks.slice(0, 10).forEach((track) => {
-				const name = `${track.info.title} by ${track.info.author}`;
-				songs.push({
-					name: name.length > 100 ? `${name.substring(0, 97)}...` : name,
-					value: track.info.uri,
+		try {
+			const res = await this.client.manager.search(focusedValue.value.trim(), interaction.user);
+			const songs: ApplicationCommandOptionChoiceData[] = [];
+
+			if (res.loadType === "search") {
+				res.tracks.slice(0, 10).forEach((track) => {
+					const name = `${track.info.title} by ${track.info.author}`;
+					songs.push({
+						name: name.length > 100 ? `${name.substring(0, 97)}...` : name,
+						value: track.info.uri,
+					});
 				});
-			});
-		}
+			}
 
-		return await interaction.respond(songs);
+			return await interaction.respond(songs);
+		} catch {
+			return interaction.respond([]);
+		}
 	}
 }
+

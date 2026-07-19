@@ -4,7 +4,7 @@ FROM oven/bun:alpine AS builder
 WORKDIR /app
 
 COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile
+RUN bun install --frozen-lockfile || bun install
 
 COPY . .
 
@@ -45,7 +45,6 @@ ENTRYPOINT [ "./entrypoint.sh" ]
 
 CMD ["bun", "run", "start"]
 
-# Metadata labels
 LABEL \
   maintainer="appujet <sdipedit@gmail.com>" \
   org.opencontainers.image.title="LavaMusic" \

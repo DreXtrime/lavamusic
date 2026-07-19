@@ -67,6 +67,13 @@ export default class Join extends Command {
 			});
 		}
 
+		const nodeReady = await client.manager.waitForNode(10_000);
+		if (!nodeReady) {
+			return await ctx.sendMessage({
+				embeds: [embed.setColor(this.client.color.red).setDescription("No Lavalink nodes available right now. Please try again.")],
+			});
+		}
+
 		player = client.manager.createPlayer({
 			guildId: ctx.guild.id,
 			voiceChannelId: memberVoiceChannel.id,
