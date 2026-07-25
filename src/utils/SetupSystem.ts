@@ -78,7 +78,7 @@ async function setupStart(
 	if (m) {
 		try {
 			if (message.inGuild()) {
-				const res = await player.search(query, message.author);
+				const res = await client.manager.search(query, message.author);
 
 				switch (res.loadType) {
 					case "empty":

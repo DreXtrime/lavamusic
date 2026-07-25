@@ -84,7 +84,7 @@ export default class PlayNext extends Command {
 
 		let response: SearchResult;
 		try {
-			response = (await player.search({ query }, ctx.author)) as SearchResult;
+			response = (await client.manager.search({ query }, ctx.author)) as SearchResult;
 		} catch (_error) {
 			return await ctx.editMessage({
 				content: "",

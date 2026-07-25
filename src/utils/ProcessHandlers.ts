@@ -14,6 +14,11 @@ const IGNORABLE = [
 	"WebSocket was closed",
 	"connect ENOENT",
 	"read ECONNRESET",
+	// lavalink-client throws this when search() is called but no node is connected
+	"No Lavalink Node was provided",
+	// thrown when a node returns HTML/garbage instead of JSON (dead public node)
+	"Failed to parse JSON",
+	"does not provide any /v4/info",
 ];
 
 function isIgnorable(err: unknown): boolean {

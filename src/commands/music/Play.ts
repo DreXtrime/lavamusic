@@ -96,7 +96,18 @@ export default class Play extends Command {
 
 		if (!player.connected) await player.connect();
 
-		const response = (await player.search({ query: query }, ctx.author)) as SearchResult;
+		let response: SearchResult;
+		try {
+			response = (await client.manager.search({ query: query }, ctx.author)) as SearchResult;
+		} catch (err) {
+			return await ctx.editMessage({
+				content: "",
+				embeds: [embed.setColor(this.client.color.red).setDescription(
+					ctx.locale(I18N.commands.play.errors.search_error) +
+					"\n*(No Lavalink nodes are available. Please try again shortly.)*"
+				)],
+			});
+		}
 
 		if (!response || response.tracks?.length === 0) {
 			return await ctx.editMessage({

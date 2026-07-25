@@ -188,7 +188,15 @@ export default class Search extends Command {
 			}
 		}
 
-		const response = (await player.search({ query: query }, ctx.author)) as SearchResult;
+		let response: SearchResult;
+		try {
+			response = (await client.manager.search({ query: query }, ctx.author)) as SearchResult;
+		} catch (_) {
+			return await ctx.editMessage({
+				content: "",
+				embeds: [embed.setColor(this.client.color.red).setDescription("No Lavalink nodes are available right now. Please try again shortly.")],
+			});
+		}
 
 		if (!response || response.tracks?.length === 0) {
 			const noResultsContainer = new ContainerBuilder()

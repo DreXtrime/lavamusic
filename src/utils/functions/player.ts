@@ -110,13 +110,17 @@ export async function autoPlayFunction(player: Player, lastTrack?: Track): Promi
 		return;
 	}
 	if (lastTrack.info.sourceName === "jiosaavn") {
-		const res = await player.search(
-			{ query: `jsrec:${lastTrack.info.identifier}`, source: "jsrec" },
-			lastTrack.requester,
-		);
-		if (res.tracks.length > 0) {
-			const track = res.tracks.filter((v) => v.info.identifier !== lastTrack.info.identifier)[0];
-			await player.queue.add(track);
+		try {
+			const res = await player.search(
+				{ query: `jsrec:${lastTrack.info.identifier}`, source: "jsrec" },
+				lastTrack.requester,
+			);
+			if (res.tracks.length > 0) {
+				const track = res.tracks.filter((v) => v.info.identifier !== lastTrack.info.identifier)[0];
+				await player.queue.add(track);
+			}
+		} catch (_) {
+			// autoplay search failed — silently skip, queue will end normally
 		}
 	}
 	return;

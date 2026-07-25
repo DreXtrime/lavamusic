@@ -103,7 +103,7 @@ export default class PlayLocal extends Command {
 
 		if (!player.connected) await player.connect();
 
-		const response = (await player
+		const response = (await client.manager
 			.search(
 				{
 					query: attachment.url,

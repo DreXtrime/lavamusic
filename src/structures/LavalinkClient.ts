@@ -88,10 +88,20 @@ export default class LavalinkClient extends LavalinkManager {
 
 	/**
 	 * Waits up to timeoutMs for at least one node to be ready.
+	 * If no nodes are connected, actively triggers reconnects on all of them.
 	 * Returns true if a node became available, false if we timed out.
 	 */
 	public async waitForNode(timeoutMs = 10_000): Promise<boolean> {
 		if (this.hasConnectedNode()) return true;
+
+		// Actively kick disconnected nodes to reconnect — don't just wait passively
+		for (const node of this.nodeManager.nodes.values()) {
+			if (!node.connected) {
+				node.connect().catch((err: Error) => {
+					logger.warn(`[Lavalink] Node "${node.id}" reconnect attempt failed: ${err?.message}`);
+				});
+			}
+		}
 
 		return new Promise((resolve) => {
 			const timer = setTimeout(() => {
