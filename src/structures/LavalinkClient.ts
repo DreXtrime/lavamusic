@@ -22,9 +22,9 @@ export default class LavalinkClient extends LavalinkManager {
 	}>();
 
 	/**
-	 * Set of guild IDs where we are intentionally destroying the player
-	 * (idle cleanup). VoiceStateUpdate checks this to avoid treating
-	 * the resulting voice disconnect event as an external kick.
+	 * Guild IDs where we are in the middle of an intentional idle destroy.
+	 * VoiceStateUpdate checks this to avoid treating the resulting disconnect
+	 * event as an external kick.
 	 */
 	public intentionalDestroy = new Set<string>();
 
@@ -99,9 +99,28 @@ export default class LavalinkClient extends LavalinkManager {
 	}
 
 	/**
+	 * Sends a raw Discord gateway op 4 (voice state update) to make the bot
+	 * join or stay in a voice channel, bypassing lavalink-client entirely.
+	 * This is how we keep the bot in voice after destroying a player.
+	 */
+	private sendVoiceConnect(guildId: string, channelId: string): void {
+		const guild = this.client.guilds.cache.get(guildId);
+		if (!guild) return;
+		guild.shard.send({
+			op: 4,
+			d: {
+				guild_id: guildId,
+				channel_id: channelId,
+				self_mute: false,
+				self_deaf: true,
+			},
+		});
+	}
+
+	/**
 	 * Schedules Lavalink player destruction after timeoutSecs.
-	 * Marks the destroy as intentional so VoiceStateUpdate ignores it.
-	 * The bot stays in the voice channel.
+	 * After destroying, immediately re-sends the voice connect op so the bot
+	 * stays in the channel at the Discord gateway level.
 	 */
 	public scheduleIdleDestroy(guildId: string, timeoutSecs: number): void {
 		const state = this.voiceStates.get(guildId);
@@ -115,22 +134,25 @@ export default class LavalinkClient extends LavalinkManager {
 		const run = async () => {
 			const player = this.getPlayer(guildId);
 			if (!player) return;
-			// Abort if playback resumed during the wait
 			if (player.playing || player.paused || player.queue.tracks.length > 0) return;
 
-			logger.info(`[Lavalink] Idle timeout reached for guild ${guildId} — destroying player, bot stays in voice.`);
+			const { voiceChannelId } = state;
+			logger.info(`[Lavalink] Idle timeout for guild ${guildId} — destroying player.`);
 
-			// Flag as intentional so VoiceStateUpdate doesn't clear voiceStates
 			this.intentionalDestroy.add(guildId);
 			try {
 				await player.destroy();
 			} catch (err) {
 				logger.warn(`[Lavalink] Player destroy failed for guild ${guildId}: ${err}`);
-			} finally {
-				// Keep the flag set briefly to cover the async voiceStateUpdate event,
-				// then clear it so future real kicks are handled correctly
-				setTimeout(() => this.intentionalDestroy.delete(guildId), 3000);
 			}
+
+			// Re-join the voice channel via raw gateway op so the bot stays put.
+			// lavalink-client sends op 4 with channel_id: null during destroy,
+			// so we immediately override that with a rejoin.
+			this.sendVoiceConnect(guildId, voiceChannelId);
+			logger.info(`[Lavalink] Guild ${guildId}: player released, bot staying in <#${voiceChannelId}>.`);
+
+			setTimeout(() => this.intentionalDestroy.delete(guildId), 5000);
 		};
 
 		if (timeoutSecs <= 0) {
