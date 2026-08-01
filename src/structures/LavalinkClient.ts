@@ -8,6 +8,9 @@ import { autoPlayFunction, requesterTransformer } from "../utils/functions/playe
 import type Lavamusic from "./Lavamusic";
 import logger from "./Logger";
 
+/** How often to ping idle nodes to keep sessions alive (ms). */
+const KEEPALIVE_INTERVAL_MS = 3 * 60 * 1000; // 3 minutes
+
 export default class LavalinkClient extends LavalinkManager {
 	public client: Lavamusic;
 
@@ -21,12 +24,9 @@ export default class LavalinkClient extends LavalinkManager {
 		idleTimer: ReturnType<typeof setTimeout> | null;
 	}>();
 
-	/**
-	 * Guild IDs where we are in the middle of an intentional idle destroy.
-	 * VoiceStateUpdate checks this to avoid treating the resulting disconnect
-	 * event as an external kick.
-	 */
 	public intentionalDestroy = new Set<string>();
+
+	private _keepaliveTimer: ReturnType<typeof setInterval> | null = null;
 
 	constructor(client: Lavamusic) {
 		super({
@@ -62,6 +62,27 @@ export default class LavalinkClient extends LavalinkManager {
 			logger.error("[Lavalink] init() threw (node probably unreachable at startup):", err);
 		}
 		logger.info("[Lavalink] Manager initialised.");
+		this._startKeepalive();
+	}
+
+	/**
+	 * Pings every connected node every 3 minutes to keep sessions alive.
+	 * Uses the node's built-in stats fetch which is a lightweight GET request.
+	 * If a node is dead the ping fails silently — the library's own reconnect handles it.
+	 */
+	private _startKeepalive(): void {
+		if (this._keepaliveTimer) clearInterval(this._keepaliveTimer);
+
+		this._keepaliveTimer = setInterval(async () => {
+			for (const node of this.nodeManager.nodes.values()) {
+				if (!node.connected) continue;
+				try {
+					await node.fetchStats();
+				} catch {
+					// Node is unresponsive — library will handle reconnect
+				}
+			}
+		}, KEEPALIVE_INTERVAL_MS);
 	}
 
 	public hasConnectedNode(): boolean {
@@ -99,66 +120,17 @@ export default class LavalinkClient extends LavalinkManager {
 	}
 
 	/**
-	 * Sends a raw Discord gateway op 4 (voice state update) to make the bot
-	 * join or stay in a voice channel, bypassing lavalink-client entirely.
-	 * This is how we keep the bot in voice after destroying a player.
+	 * Called when the queue ends or /stop is used.
+	 * Just stops playback — does NOT destroy the player or disconnect from voice.
+	 * The keepalive ping keeps the Lavalink session alive while idle.
 	 */
-	private sendVoiceConnect(guildId: string, channelId: string): void {
-		const guild = this.client.guilds.cache.get(guildId);
-		if (!guild) return;
-		guild.shard.send({
-			op: 4,
-			d: {
-				guild_id: guildId,
-				channel_id: channelId,
-				self_mute: false,
-				self_deaf: true,
-			},
-		});
-	}
-
-	/**
-	 * Schedules Lavalink player destruction after timeoutSecs.
-	 * After destroying, immediately re-sends the voice connect op so the bot
-	 * stays in the channel at the Discord gateway level.
-	 */
-	public scheduleIdleDestroy(guildId: string, timeoutSecs: number): void {
+	public scheduleIdleDestroy(guildId: string, _timeoutSecs: number): void {
+		// No-op: we no longer destroy idle players.
+		// The player sits in voice doing nothing, keepalive prevents session timeout.
 		const state = this.voiceStates.get(guildId);
-		if (!state) return;
-
-		if (state.idleTimer) {
+		if (state?.idleTimer) {
 			clearTimeout(state.idleTimer);
 			state.idleTimer = null;
-		}
-
-		const run = async () => {
-			const player = this.getPlayer(guildId);
-			if (!player) return;
-			if (player.playing || player.paused || player.queue.tracks.length > 0) return;
-
-			const { voiceChannelId } = state;
-			logger.info(`[Lavalink] Idle timeout for guild ${guildId} — destroying player.`);
-
-			this.intentionalDestroy.add(guildId);
-			try {
-				await player.destroy();
-			} catch (err) {
-				logger.warn(`[Lavalink] Player destroy failed for guild ${guildId}: ${err}`);
-			}
-
-			// Re-join the voice channel via raw gateway op so the bot stays put.
-			// lavalink-client sends op 4 with channel_id: null during destroy,
-			// so we immediately override that with a rejoin.
-			this.sendVoiceConnect(guildId, voiceChannelId);
-			logger.info(`[Lavalink] Guild ${guildId}: player released, bot staying in <#${voiceChannelId}>.`);
-
-			setTimeout(() => this.intentionalDestroy.delete(guildId), 5000);
-		};
-
-		if (timeoutSecs <= 0) {
-			run();
-		} else {
-			state.idleTimer = setTimeout(run, timeoutSecs * 1000);
 		}
 	}
 

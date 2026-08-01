@@ -1,8 +1,6 @@
 import type { TextChannel } from "discord.js";
 import type { Player, Track, TrackStartEvent } from "lavalink-client";
-import { env } from "../../env";
 import { Event, type Lavamusic } from "../../structures/index";
-import logger from "../../structures/Logger";
 import { LavamusicEventType } from "../../types/events";
 import { updateSetup } from "../../utils/SetupSystem";
 
@@ -33,16 +31,7 @@ export default class QueueEnd extends Event {
 			if (message?.editable) await message.edit({ components: [] }).catch(() => null);
 		}
 
-		const timeoutSecs = env.LEAVE_TIMEOUT;
-
-		// Schedule Lavalink player destruction — bot stays in voice channel
-		this.client.manager.scheduleIdleDestroy(player.guildId, timeoutSecs);
-
-		logger.info(
-			`[QueueEnd] Guild ${guild.id}: queue empty. ` +
-			(timeoutSecs > 0
-				? `Lavalink player will be released in ${timeoutSecs}s.`
-				: "Lavalink player released immediately."),
-		);
+		// Player stays alive in voice — keepalive ping keeps the Lavalink session open.
+		// No destroy, no disconnect sound, bot sits silently until next /play.
 	}
 }

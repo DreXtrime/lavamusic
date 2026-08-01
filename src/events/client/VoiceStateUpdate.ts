@@ -46,7 +46,7 @@ export default class VoiceStateUpdate extends Event {
 		const guildId = newState.guild.id;
 		const player = this.client.manager.getPlayer(guildId);
 
-		// Bot was server-muted/unmuted — pause/resume player accordingly
+		// Server mute/unmute — pause or resume playback
 		if (newState.serverMute !== oldState.serverMute && player) {
 			try {
 				if (newState.serverMute && !player.paused) {
@@ -59,17 +59,8 @@ export default class VoiceStateUpdate extends Event {
 			}
 		}
 
-		// Bot left voice (channelId went from set to null)
+		// Bot was kicked from voice
 		if (oldState.channelId && !newState.channelId) {
-			// If this was triggered by our own idle destroy, ignore it —
-			// the bot's voice state update is a side effect of player.destroy(),
-			// not a real external kick. voiceStates stays intact.
-			if (this.client.manager.intentionalDestroy.has(guildId)) {
-				logger.info(`[VoiceStateUpdate] Guild ${guildId}: voice disconnect was from idle cleanup — bot stays registered in channel.`);
-				return;
-			}
-
-			// Real external kick — clean everything up
 			logger.info(`[VoiceStateUpdate] Bot was removed from voice in guild ${guildId}.`);
 			this.client.manager.cancelIdleTimer(guildId);
 			this.client.manager.voiceStates.delete(guildId);
