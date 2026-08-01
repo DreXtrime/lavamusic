@@ -18,28 +18,24 @@ export default class VoiceStateUpdate extends Event {
 		if (!guildId) return;
 
 		try {
-			// Handle bot's own voice state changes
 			if (newState.id === this.client.user!.id) {
 				await this.handleBotStateChange(oldState, newState);
 			}
 
-			// Handle stage channel suppress logic when bot or someone joins
+			// Stage channel suppress handling
 			const botState = newState.guild.voiceStates.cache.get(this.client.user!.id);
 			if (
 				botState?.channelId &&
 				botState.channel?.type === ChannelType.GuildStageVoice &&
-				botState.suppress
+				botState.suppress &&
+				botState.channel &&
+				botState.member &&
+				botState.channel.permissionsFor(botState.member).has(PermissionFlagsBits.MuteMembers)
 			) {
-				if (
-					botState.channel &&
-					botState.member &&
-					botState.channel.permissionsFor(botState.member).has(PermissionFlagsBits.MuteMembers)
-				) {
-					await this.delay(3000);
-					await botState.setSuppressed(false).catch((err) =>
-						logger.warn("[VoiceStateUpdate] setSuppressed(false) failed:", err),
-					);
-				}
+				await this.delay(3000);
+				await botState.setSuppressed(false).catch((err) =>
+					logger.warn("[VoiceStateUpdate] setSuppressed(false) failed:", err),
+				);
 			}
 		} catch (err) {
 			logger.error("[VoiceStateUpdate] handler error:", err);
@@ -47,11 +43,11 @@ export default class VoiceStateUpdate extends Event {
 	}
 
 	private async handleBotStateChange(oldState: VoiceState, newState: VoiceState): Promise<void> {
-		const player = this.client.manager.getPlayer(newState.guild.id);
+		const guildId = newState.guild.id;
+		const player = this.client.manager.getPlayer(guildId);
 
-		// Bot was server-muted/unmuted — pause/resume accordingly
-		if (newState.serverMute !== oldState.serverMute) {
-			if (!player) return;
+		// Bot was server-muted/unmuted — pause/resume player accordingly
+		if (newState.serverMute !== oldState.serverMute && player) {
 			try {
 				if (newState.serverMute && !player.paused) {
 					await player.pause();
@@ -63,9 +59,21 @@ export default class VoiceStateUpdate extends Event {
 			}
 		}
 
-		// Bot was kicked from voice — destroy the player but keep voiceStates entry
-		// so the user knows which channel to rejoin with /play
+		// Bot left voice (channelId went from set to null)
 		if (oldState.channelId && !newState.channelId) {
+			// If this was triggered by our own idle destroy, ignore it —
+			// the bot's voice state update is a side effect of player.destroy(),
+			// not a real external kick. voiceStates stays intact.
+			if (this.client.manager.intentionalDestroy.has(guildId)) {
+				logger.info(`[VoiceStateUpdate] Guild ${guildId}: voice disconnect was from idle cleanup — bot stays registered in channel.`);
+				return;
+			}
+
+			// Real external kick — clean everything up
+			logger.info(`[VoiceStateUpdate] Bot was removed from voice in guild ${guildId}.`);
+			this.client.manager.cancelIdleTimer(guildId);
+			this.client.manager.voiceStates.delete(guildId);
+
 			if (player) {
 				try {
 					await player.destroy();
@@ -73,9 +81,6 @@ export default class VoiceStateUpdate extends Event {
 					logger.warn("[VoiceStateUpdate] destroy() after bot kick failed:", err);
 				}
 			}
-			// Remove voice state — bot is no longer in the channel
-			this.client.manager.voiceStates.delete(newState.guild.id);
-			logger.info(`[VoiceStateUpdate] Bot was removed from voice in guild ${newState.guild.id}.`);
 		}
 	}
 }

@@ -12,15 +12,21 @@ export default class LavalinkClient extends LavalinkManager {
 	public client: Lavamusic;
 
 	/**
-	 * Tracks which voice/text channel the bot is sitting in per guild.
-	 * This is independent of whether a Lavalink player exists — the bot
-	 * can be in a channel with no player (after idle timeout).
+	 * Tracks which voice/text channel the bot is sitting in per guild,
+	 * independently of whether a Lavalink player exists.
 	 */
 	public voiceStates = new Map<string, {
 		voiceChannelId: string;
 		textChannelId: string;
 		idleTimer: ReturnType<typeof setTimeout> | null;
 	}>();
+
+	/**
+	 * Set of guild IDs where we are intentionally destroying the player
+	 * (idle cleanup). VoiceStateUpdate checks this to avoid treating
+	 * the resulting voice disconnect event as an external kick.
+	 */
+	public intentionalDestroy = new Set<string>();
 
 	constructor(client: Lavamusic) {
 		super({
@@ -39,10 +45,14 @@ export default class LavalinkClient extends LavalinkManager {
 		});
 		this.client = client;
 
-		this.nodeManager.on("connect", (node) => logger.info(`[Lavalink] Node "${node.id}" connected.`));
-		this.nodeManager.on("reconnecting", (node) => logger.info(`[Lavalink] Node "${node.id}" reconnecting…`));
-		this.nodeManager.on("disconnect", (node) => logger.warn(`[Lavalink] Node "${node.id}" disconnected — retrying automatically.`));
-		this.nodeManager.on("error", (node, err) => logger.error(`[Lavalink] Node "${node.id}" error: ${err?.message ?? String(err)}`));
+		this.nodeManager.on("connect", (node) =>
+			logger.info(`[Lavalink] Node "${node.id}" connected.`));
+		this.nodeManager.on("reconnecting", (node) =>
+			logger.info(`[Lavalink] Node "${node.id}" reconnecting…`));
+		this.nodeManager.on("disconnect", (node) =>
+			logger.warn(`[Lavalink] Node "${node.id}" disconnected — retrying automatically.`));
+		this.nodeManager.on("error", (node, err) =>
+			logger.error(`[Lavalink] Node "${node.id}" error: ${err?.message ?? String(err)}`));
 	}
 
 	public async initAndConnect(options: Parameters<LavalinkManager["init"]>[0]): Promise<void> {
@@ -61,9 +71,6 @@ export default class LavalinkClient extends LavalinkManager {
 		return false;
 	}
 
-	/**
-	 * Waits up to timeoutMs for a node. Actively triggers reconnects if none are up.
-	 */
 	public async waitForNode(timeoutMs = 15_000): Promise<boolean> {
 		if (this.hasConnectedNode()) return true;
 
@@ -92,8 +99,9 @@ export default class LavalinkClient extends LavalinkManager {
 	}
 
 	/**
-	 * Schedules destruction of just the Lavalink player after timeoutSecs.
-	 * The bot stays in the voice channel. Cancels any existing timer first.
+	 * Schedules Lavalink player destruction after timeoutSecs.
+	 * Marks the destroy as intentional so VoiceStateUpdate ignores it.
+	 * The bot stays in the voice channel.
 	 */
 	public scheduleIdleDestroy(guildId: string, timeoutSecs: number): void {
 		const state = this.voiceStates.get(guildId);
@@ -109,12 +117,19 @@ export default class LavalinkClient extends LavalinkManager {
 			if (!player) return;
 			// Abort if playback resumed during the wait
 			if (player.playing || player.paused || player.queue.tracks.length > 0) return;
+
+			logger.info(`[Lavalink] Idle timeout reached for guild ${guildId} — destroying player, bot stays in voice.`);
+
+			// Flag as intentional so VoiceStateUpdate doesn't clear voiceStates
+			this.intentionalDestroy.add(guildId);
 			try {
-				// destroy() with false keeps the bot in voice
-				await player.destroy(false as any);
-				logger.info(`[Lavalink] Player destroyed for guild ${guildId} (idle). Bot stays in voice.`);
+				await player.destroy();
 			} catch (err) {
 				logger.warn(`[Lavalink] Player destroy failed for guild ${guildId}: ${err}`);
+			} finally {
+				// Keep the flag set briefly to cover the async voiceStateUpdate event,
+				// then clear it so future real kicks are handled correctly
+				setTimeout(() => this.intentionalDestroy.delete(guildId), 3000);
 			}
 		};
 
@@ -125,7 +140,6 @@ export default class LavalinkClient extends LavalinkManager {
 		}
 	}
 
-	/** Cancel a pending idle-destroy timer. Call this when playback resumes. */
 	public cancelIdleTimer(guildId: string): void {
 		const state = this.voiceStates.get(guildId);
 		if (state?.idleTimer) {
@@ -134,7 +148,6 @@ export default class LavalinkClient extends LavalinkManager {
 		}
 	}
 
-	/** Search for tracks, waiting briefly for a node if needed. */
 	public async search(
 		query: string | { query: string; source?: SearchPlatform },
 		user: unknown,
@@ -150,7 +163,6 @@ export default class LavalinkClient extends LavalinkManager {
 		);
 	}
 
-	/** No-op stubs kept for compatibility with ProcessHandlers */
 	public async disconnectAllNodes(): Promise<void> {}
 	public resetIdleTimer(): void {}
 }
