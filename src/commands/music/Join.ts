@@ -42,39 +42,43 @@ export default class Join extends Command {
 
 	public async run(client: Lavamusic, ctx: Context): Promise<any> {
 		const embed = this.client.embed();
-		let player = client.manager.getPlayer(ctx.guild.id);
-
-		if (player) {
-			return await ctx.sendMessage({
-				embeds: [
-					embed.setColor(this.client.color.main).setDescription(
-						ctx.locale(I18N.commands.join.already_connected, {
-							channelId: player.voiceChannelId,
-						}),
-					),
-				],
-			});
-		}
-
 		const memberVoiceChannel = (ctx.member as any).voice.channel as VoiceChannel;
+
 		if (!memberVoiceChannel) {
 			return await ctx.sendMessage({
-				embeds: [
-					embed
-						.setColor(this.client.color.red)
-						.setDescription(ctx.locale(I18N.commands.join.no_voice_channel)),
-				],
+				embeds: [embed.setColor(this.client.color.red).setDescription(
+					ctx.locale(I18N.commands.join.no_voice_channel),
+				)],
 			});
 		}
 
-		const nodeReady = await client.manager.waitForNode(10_000);
+		const existing = client.manager.getPlayer(ctx.guild.id);
+		if (existing) {
+			return await ctx.sendMessage({
+				embeds: [embed.setColor(this.client.color.main).setDescription(
+					ctx.locale(I18N.commands.join.already_connected, { channelId: existing.voiceChannelId }),
+				)],
+			});
+		}
+
+		// Register voice state — the bot will sit here even after the player is destroyed
+		client.manager.voiceStates.set(ctx.guild.id, {
+			voiceChannelId: memberVoiceChannel.id,
+			textChannelId: ctx.channel.id,
+			idleTimer: null,
+		});
+
+		// Wait for a Lavalink node
+		const nodeReady = await client.manager.waitForNode(15_000);
 		if (!nodeReady) {
 			return await ctx.sendMessage({
-				embeds: [embed.setColor(this.client.color.red).setDescription("No Lavalink nodes available right now. Please try again.")],
+				embeds: [embed.setColor(this.client.color.red).setDescription(
+					"No Lavalink nodes available right now. The bot can still join the channel with `/play` when a node is available.",
+				)],
 			});
 		}
 
-		player = client.manager.createPlayer({
+		const player = client.manager.createPlayer({
 			guildId: ctx.guild.id,
 			voiceChannelId: memberVoiceChannel.id,
 			textChannelId: ctx.channel.id,
@@ -82,15 +86,13 @@ export default class Join extends Command {
 			selfDeaf: true,
 			vcRegion: memberVoiceChannel.rtcRegion ?? undefined,
 		});
+
 		if (!player.connected) await player.connect();
+
 		return await ctx.sendMessage({
-			embeds: [
-				embed.setColor(this.client.color.main).setDescription(
-					ctx.locale(I18N.commands.join.joined, {
-						channelId: player.voiceChannelId,
-					}),
-				),
-			],
+			embeds: [embed.setColor(this.client.color.main).setDescription(
+				ctx.locale(I18N.commands.join.joined, { channelId: player.voiceChannelId }),
+			)],
 		});
 	}
 }

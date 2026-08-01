@@ -17,55 +17,32 @@ export default class QueueEnd extends Event {
 	public async run(player: Player, _track: Track | null, _payload: TrackStartEvent): Promise<void> {
 		const guild = this.client.guilds.cache.get(player.guildId);
 		if (!guild) return;
+
 		const locale = await this.client.db.getLanguage(player.guildId);
 		await updateSetup(this.client, guild, locale);
 
 		if (player.voiceChannelId) {
-			await this.client.utils.setVoiceStatus(this.client, player.voiceChannelId, "");
+			await this.client.utils.setVoiceStatus(this.client, player.voiceChannelId, "").catch(() => null);
 		}
 
+		// Clear now-playing message controls
 		const messageId = player.get<string | undefined>("messageId");
-		const channel = guild.channels.cache.get(player.textChannelId!) as TextChannel;
-
+		const channel = guild.channels.cache.get(player.textChannelId!) as TextChannel | undefined;
 		if (messageId && channel) {
 			const message = await channel.messages.fetch(messageId).catch(() => null);
-			if (message?.editable) {
-				await message.edit({ components: [] }).catch(() => null);
-			}
+			if (message?.editable) await message.edit({ components: [] }).catch(() => null);
 		}
 
-		// Schedule auto-leave after LEAVE_TIMEOUT seconds (0 = leave immediately)
 		const timeoutSecs = env.LEAVE_TIMEOUT;
-		const delay = timeoutSecs * 1000;
 
-		const leave = async (): Promise<void> => {
-			// If someone queued a new track while we were waiting, abort
-			if (player.queue.tracks.length > 0 || player.playing) return;
+		// Schedule Lavalink player destruction — bot stays in voice channel
+		this.client.manager.scheduleIdleDestroy(player.guildId, timeoutSecs);
 
-			try {
-				if (channel && timeoutSecs > 0) {
-					await channel
-						.send({
-							embeds: [
-								this.client
-									.embed()
-									.setColor(this.client.color.main)
-									.setDescription(`Left <#${player.voiceChannelId}> due to inactivity.`),
-							],
-						})
-						.catch(() => null);
-				}
-				await player.destroy();
-				logger.info(`[QueueEnd] Left voice channel in guild ${guild.id} after inactivity.`);
-			} catch (err) {
-				logger.error(`[QueueEnd] Failed to leave voice channel in guild ${guild.id}: ${err}`);
-			}
-		};
-
-		if (delay <= 0) {
-			await leave();
-		} else {
-			setTimeout(leave, delay);
-		}
+		logger.info(
+			`[QueueEnd] Guild ${guild.id}: queue empty. ` +
+			(timeoutSecs > 0
+				? `Lavalink player will be released in ${timeoutSecs}s.`
+				: "Lavalink player released immediately."),
+		);
 	}
 }

@@ -26,7 +26,6 @@ export default class Play extends Command {
 					"play example",
 					"play https://www.youtube.com/watch?v=example",
 					"play https://open.spotify.com/track/example",
-					"play http://www.example.com/example.mp3",
 				],
 				usage: "play <song>",
 			},
@@ -64,47 +63,56 @@ export default class Play extends Command {
 		await ctx.sendDeferMessage(ctx.locale(I18N.commands.play.loading));
 
 		const embed = this.client.embed();
+		const memberVoiceChannel = (ctx.member as any).voice.channel as VoiceChannel;
 
-		// Wait briefly for a node if none are connected yet
-		const nodeReady = await client.manager.waitForNode(10_000);
+		// Wait for a Lavalink node
+		const nodeReady = await client.manager.waitForNode(15_000);
 		if (!nodeReady) {
 			return await ctx.editMessage({
 				content: "",
-				embeds: [
-					embed
-						.setColor(this.client.color.red)
-						.setDescription(
-							ctx.locale(I18N.commands.play.errors.search_error) +
-								"\n*(No Lavalink nodes are available right now. Please try again in a moment.)*",
-						),
-				],
+				embeds: [embed.setColor(this.client.color.red).setDescription(
+					ctx.locale(I18N.commands.play.errors.search_error) +
+					"\n*(No Lavalink nodes available right now. Please try again in a moment.)*",
+				)],
 			});
 		}
 
-		let player = client.manager.getPlayer(ctx.guild.id);
-		const memberVoiceChannel = (ctx.member as any).voice.channel as VoiceChannel;
+		// Cancel any pending idle-destroy since we have new activity
+		client.manager.cancelIdleTimer(ctx.guild.id);
 
-		if (!player)
+		// Track voice state so we know where the bot is even without a player
+		const existing = client.manager.voiceStates.get(ctx.guild.id);
+		client.manager.voiceStates.set(ctx.guild.id, {
+			voiceChannelId: memberVoiceChannel.id,
+			textChannelId: ctx.channel.id,
+			idleTimer: existing?.idleTimer ?? null,
+		});
+
+		// Get existing player or create a fresh one
+		let player = client.manager.getPlayer(ctx.guild.id);
+		if (!player) {
 			player = client.manager.createPlayer({
 				guildId: ctx.guild.id,
 				voiceChannelId: memberVoiceChannel.id,
 				textChannelId: ctx.channel.id,
 				selfMute: false,
 				selfDeaf: true,
-				vcRegion: memberVoiceChannel.rtcRegion!,
+				vcRegion: memberVoiceChannel.rtcRegion ?? undefined,
 			});
+		}
 
 		if (!player.connected) await player.connect();
 
+		// Search
 		let response: SearchResult;
 		try {
-			response = (await client.manager.search({ query: query }, ctx.author)) as SearchResult;
-		} catch (err) {
+			response = await client.manager.search({ query }, ctx.author);
+		} catch {
 			return await ctx.editMessage({
 				content: "",
 				embeds: [embed.setColor(this.client.color.red).setDescription(
 					ctx.locale(I18N.commands.play.errors.search_error) +
-					"\n*(No Lavalink nodes are available. Please try again shortly.)*"
+					"\n*(Search failed — no Lavalink nodes available.)*",
 				)],
 			});
 		}
@@ -112,63 +120,52 @@ export default class Play extends Command {
 		if (!response || response.tracks?.length === 0) {
 			return await ctx.editMessage({
 				content: "",
-				embeds: [
-					embed
-						.setColor(this.client.color.red)
-						.setDescription(ctx.locale(I18N.commands.play.errors.search_error)),
-				],
+				embeds: [embed.setColor(this.client.color.red).setDescription(
+					ctx.locale(I18N.commands.play.errors.search_error),
+				)],
 			});
 		}
 
-		await player.queue.add(response.loadType === "playlist" ? response.tracks : response.tracks[0]);
+		await player.queue.add(
+			response.loadType === "playlist" ? response.tracks : response.tracks[0],
+		);
 
-		const fairPlayEnabled = player.get<boolean>("fairplay");
-		if (fairPlayEnabled) {
+		if (player.get<boolean>("fairplay")) {
 			await applyFairPlayToQueue(player);
 		}
 
 		if (response.loadType === "playlist") {
 			await ctx.editMessage({
 				content: "",
-				embeds: [
-					embed.setColor(this.client.color.main).setDescription(
-						ctx.locale(I18N.commands.play.added_playlist_to_queue, {
-							length: response.tracks.length,
-						}),
-					),
-				],
+				embeds: [embed.setColor(this.client.color.main).setDescription(
+					ctx.locale(I18N.commands.play.added_playlist_to_queue, { length: response.tracks.length }),
+				)],
 			});
 		} else {
 			await ctx.editMessage({
 				content: "",
-				embeds: [
-					embed.setColor(this.client.color.main).setDescription(
-						ctx.locale(I18N.commands.play.added_to_queue, {
-							title: response.tracks[0].info.title,
-							uri: response.tracks[0].info.uri,
-						}),
-					),
-				],
+				embeds: [embed.setColor(this.client.color.main).setDescription(
+					ctx.locale(I18N.commands.play.added_to_queue, {
+						title: response.tracks[0].info.title,
+						uri: response.tracks[0].info.uri,
+					}),
+				)],
 			});
 		}
-		if (!player.playing && player.queue.tracks.length > 0) await player.play({ paused: false });
+
+		if (!player.playing && player.queue.tracks.length > 0) {
+			await player.play({ paused: false });
+		}
 	}
 
 	public async autocomplete(interaction: AutocompleteInteraction): Promise<void> {
 		const focusedValue = interaction.options.getFocused(true);
-
-		if (!focusedValue?.value.trim()) {
-			return interaction.respond([]);
-		}
-
-		// Autocomplete only works if nodes are already connected (don't spin up a connection for every keystroke)
-		const hasNode = this.client.manager.hasConnectedNode();
-		if (!hasNode) return interaction.respond([]);
+		if (!focusedValue?.value.trim()) return interaction.respond([]);
+		if (!this.client.manager.hasConnectedNode()) return interaction.respond([]);
 
 		try {
 			const res = await this.client.manager.search(focusedValue.value.trim(), interaction.user);
 			const songs: ApplicationCommandOptionChoiceData[] = [];
-
 			if (res.loadType === "search") {
 				res.tracks.slice(0, 10).forEach((track) => {
 					const name = `${track.info.title} by ${track.info.author}`;
@@ -178,7 +175,6 @@ export default class Play extends Command {
 					});
 				});
 			}
-
 			return await interaction.respond(songs);
 		} catch {
 			return interaction.respond([]);

@@ -11,74 +11,49 @@ import logger from "./Logger";
 export default class LavalinkClient extends LavalinkManager {
 	public client: Lavamusic;
 
+	/**
+	 * Tracks which voice/text channel the bot is sitting in per guild.
+	 * This is independent of whether a Lavalink player exists — the bot
+	 * can be in a channel with no player (after idle timeout).
+	 */
+	public voiceStates = new Map<string, {
+		voiceChannelId: string;
+		textChannelId: string;
+		idleTimer: ReturnType<typeof setTimeout> | null;
+	}>();
+
 	constructor(client: Lavamusic) {
 		super({
 			nodes: client.env.NODES as LavalinkNodeOptions[],
 			sendToShard: (guildId, payload) => client.guilds.cache.get(guildId)?.shard?.send(payload),
 			autoSkip: true,
-			client: {
-				id: client.env.CLIENT_ID,
-				username: "LavaMusic",
-			},
-			queueOptions: {
-				maxPreviousTracks: 25,
-			},
+			client: { id: client.env.CLIENT_ID, username: "LavaMusic" },
+			queueOptions: { maxPreviousTracks: 25 },
 			playerOptions: {
 				defaultSearchPlatform: client.env.SEARCH_ENGINE,
-				onDisconnect: {
-					autoReconnect: true,
-					destroyPlayer: false,
-				},
+				onDisconnect: { autoReconnect: true, destroyPlayer: false },
 				requesterTransformer: requesterTransformer,
-				onEmptyQueue: {
-					autoPlayFunction,
-				},
+				onEmptyQueue: { autoPlayFunction },
 			},
 			autoMove: true,
 		});
 		this.client = client;
 
-		this.nodeManager.on("connect", (node) => {
-			logger.info(`[Lavalink] Node "${node.id}" connected.`);
-		});
-
-		this.nodeManager.on("reconnecting", (node) => {
-			logger.info(`[Lavalink] Node "${node.id}" reconnecting…`);
-		});
-
-		this.nodeManager.on("disconnect", (node) => {
-			logger.warn(`[Lavalink] Node "${node.id}" disconnected — will retry automatically.`);
-		});
-
-		// Catch errors at the node level so they never bubble up to an uncaught exception
-		this.nodeManager.on("error", (node, err) => {
-			const msg = err?.message ?? String(err);
-			logger.error(`[Lavalink] Node "${node.id}" error: ${msg}`);
-			// Do NOT re-throw — let the library handle its own reconnect
-		});
+		this.nodeManager.on("connect", (node) => logger.info(`[Lavalink] Node "${node.id}" connected.`));
+		this.nodeManager.on("reconnecting", (node) => logger.info(`[Lavalink] Node "${node.id}" reconnecting…`));
+		this.nodeManager.on("disconnect", (node) => logger.warn(`[Lavalink] Node "${node.id}" disconnected — retrying automatically.`));
+		this.nodeManager.on("error", (node, err) => logger.error(`[Lavalink] Node "${node.id}" error: ${err?.message ?? String(err)}`));
 	}
 
-	/**
-	 * Called from the Ready event. Connects all nodes and keeps them connected.
-	 * The lavalink-client library handles reconnects automatically.
-	 */
 	public async initAndConnect(options: Parameters<LavalinkManager["init"]>[0]): Promise<void> {
 		try {
 			await super.init(options);
 		} catch (err) {
-			// init() itself can throw if a node times out — log and continue
 			logger.error("[Lavalink] init() threw (node probably unreachable at startup):", err);
 		}
-		logger.info("[Lavalink] Manager initialised. Nodes will connect in the background.");
+		logger.info("[Lavalink] Manager initialised.");
 	}
 
-	/** No-op — kept so ProcessHandlers shutdown call doesn't break. */
-	public async disconnectAllNodes(): Promise<void> {}
-
-	/** No-op — idle disconnect removed. */
-	public resetIdleTimer(): void {}
-
-	/** Returns true if at least one node is currently connected. */
 	public hasConnectedNode(): boolean {
 		for (const node of this.nodeManager.nodes.values()) {
 			if (node.connected) return true;
@@ -87,19 +62,16 @@ export default class LavalinkClient extends LavalinkManager {
 	}
 
 	/**
-	 * Waits up to timeoutMs for at least one node to be ready.
-	 * If no nodes are connected, actively triggers reconnects on all of them.
-	 * Returns true if a node became available, false if we timed out.
+	 * Waits up to timeoutMs for a node. Actively triggers reconnects if none are up.
 	 */
-	public async waitForNode(timeoutMs = 10_000): Promise<boolean> {
+	public async waitForNode(timeoutMs = 15_000): Promise<boolean> {
 		if (this.hasConnectedNode()) return true;
 
-		// Actively kick disconnected nodes to reconnect — don't just wait passively
 		for (const node of this.nodeManager.nodes.values()) {
 			if (!node.connected) {
-				node.connect().catch((err: Error) => {
-					logger.warn(`[Lavalink] Node "${node.id}" reconnect attempt failed: ${err?.message}`);
-				});
+				node.connect().catch((err: Error) =>
+					logger.warn(`[Lavalink] Node "${node.id}" reconnect attempt failed: ${err?.message}`),
+				);
 			}
 		}
 
@@ -119,13 +91,56 @@ export default class LavalinkClient extends LavalinkManager {
 		});
 	}
 
+	/**
+	 * Schedules destruction of just the Lavalink player after timeoutSecs.
+	 * The bot stays in the voice channel. Cancels any existing timer first.
+	 */
+	public scheduleIdleDestroy(guildId: string, timeoutSecs: number): void {
+		const state = this.voiceStates.get(guildId);
+		if (!state) return;
+
+		if (state.idleTimer) {
+			clearTimeout(state.idleTimer);
+			state.idleTimer = null;
+		}
+
+		const run = async () => {
+			const player = this.getPlayer(guildId);
+			if (!player) return;
+			// Abort if playback resumed during the wait
+			if (player.playing || player.paused || player.queue.tracks.length > 0) return;
+			try {
+				// destroy() with false keeps the bot in voice
+				await player.destroy(false as any);
+				logger.info(`[Lavalink] Player destroyed for guild ${guildId} (idle). Bot stays in voice.`);
+			} catch (err) {
+				logger.warn(`[Lavalink] Player destroy failed for guild ${guildId}: ${err}`);
+			}
+		};
+
+		if (timeoutSecs <= 0) {
+			run();
+		} else {
+			state.idleTimer = setTimeout(run, timeoutSecs * 1000);
+		}
+	}
+
+	/** Cancel a pending idle-destroy timer. Call this when playback resumes. */
+	public cancelIdleTimer(guildId: string): void {
+		const state = this.voiceStates.get(guildId);
+		if (state?.idleTimer) {
+			clearTimeout(state.idleTimer);
+			state.idleTimer = null;
+		}
+	}
+
 	/** Search for tracks, waiting briefly for a node if needed. */
 	public async search(
 		query: string | { query: string; source?: SearchPlatform },
 		user: unknown,
 		source?: SearchPlatform,
 	): Promise<SearchResult> {
-		const ready = await this.waitForNode(10_000);
+		const ready = await this.waitForNode();
 		if (!ready) throw new Error("No Lavalink nodes are currently available.");
 		const node = this.nodeManager.leastUsedNodes()[0];
 		return await node.search(
@@ -134,4 +149,8 @@ export default class LavalinkClient extends LavalinkManager {
 			false,
 		);
 	}
+
+	/** No-op stubs kept for compatibility with ProcessHandlers */
+	public async disconnectAllNodes(): Promise<void> {}
+	public resetIdleTimer(): void {}
 }

@@ -1,6 +1,7 @@
 import { I18N } from "../../structures/I18n";
 import { Command, type Context, type Lavamusic } from "../../structures/index";
 import { EmbedLinks, ReadMessageHistory, SendMessages, ViewChannel } from "../../utils/Permissions";
+import { env } from "../../env";
 
 export default class Stop extends Command {
 	constructor(client: Lavamusic) {
@@ -36,6 +37,8 @@ export default class Stop extends Command {
 		const player = client.manager.getPlayer(ctx.guild.id);
 		const embed = this.client.embed();
 		if (!player) return await ctx.sendMessage(ctx.locale(I18N.events.message.no_music_playing));
+
+		// Clear queue and stop playback — triggers queueEnd which schedules player destroy
 		player.stopPlaying(true, false);
 
 		return await ctx.sendMessage({

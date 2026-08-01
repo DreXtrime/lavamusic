@@ -1,10 +1,6 @@
 import type { Lavamusic } from "../structures/index";
 import logger from "../structures/Logger";
 
-/** Error names/messages that are safe to swallow — they come from lavalink-client
- *  internals when a node connection times out or drops. The library already handles
- *  retrying; we just need to stop them from killing the process.
- */
 const IGNORABLE = [
 	"TimeoutError",
 	"The operation timed out",
@@ -14,11 +10,11 @@ const IGNORABLE = [
 	"WebSocket was closed",
 	"connect ENOENT",
 	"read ECONNRESET",
-	// lavalink-client throws this when search() is called but no node is connected
 	"No Lavalink Node was provided",
-	// thrown when a node returns HTML/garbage instead of JSON (dead public node)
 	"Failed to parse JSON",
 	"does not provide any /v4/info",
+	"socket hang up",
+	"EPIPE",
 ];
 
 function isIgnorable(err: unknown): boolean {
@@ -30,29 +26,25 @@ function isIgnorable(err: unknown): boolean {
 }
 
 export function setupAntiCrash(client: Lavamusic): void {
-	// Catches promise rejections that were never .catch()-ed
 	process.on("unhandledRejection", (reason) => {
 		if (isIgnorable(reason)) {
-			logger.warn(`[AntiCrash] Suppressed ignorable unhandledRejection: ${reason}`);
+			logger.warn(`[AntiCrash] Suppressed unhandledRejection: ${reason}`);
 			return;
 		}
-		logger.error("Unhandled Rejection:", reason);
+		logger.error("[AntiCrash] Unhandled Rejection:", reason);
 	});
 
-	// Catches synchronous throws that escaped all try/catch
 	process.on("uncaughtException", (err) => {
 		if (isIgnorable(err)) {
-			logger.warn(`[AntiCrash] Suppressed ignorable uncaughtException: ${err?.message}`);
+			logger.warn(`[AntiCrash] Suppressed uncaughtException: ${err?.message}`);
 			return;
 		}
-		logger.error("Uncaught Exception:", err);
+		logger.error("[AntiCrash] Uncaught Exception:", err);
 	});
 
-	// Secondary monitor — fires before uncaughtException and cannot prevent the crash
-	// by itself, but combined with uncaughtException it gives us two chances to log
 	process.on("uncaughtExceptionMonitor", (err) => {
 		if (!isIgnorable(err)) {
-			logger.error("uncaughtExceptionMonitor:", err);
+			logger.error("[AntiCrash] uncaughtExceptionMonitor:", err);
 		}
 	});
 
